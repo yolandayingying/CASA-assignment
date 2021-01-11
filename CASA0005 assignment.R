@@ -106,11 +106,4 @@ GWRModel.1314 #print the results of the model
 
 
 
-results.1112<-as.data.frame(GWRModel.1112$SDF)
-#names(results.1112)
-shp.1112$pred <- results.1112$pred  # GWR预测的结果
-ggplot(shp.1112) + 
-  geom_sf(aes(fill=pred)) +
-  labs(title = 'GWR predicted obese rate in age 4~5 years old')
-
 
