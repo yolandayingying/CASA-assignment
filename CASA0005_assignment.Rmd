@@ -1,0 +1,325 @@
+---
+title: "CASA0005_assignment"
+author: "Jiaying Ying"
+date: "11-01-2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 0.Load the package and read the data
+
+```{r include=FALSE}
+library(sf) # Simple Features for R
+library(tmap) # Thematic Maps
+tmap_mode("view")
+library(spdep) # Spatial Dependence: Weighting Schemes, Statistics
+library(tidyverse) # Easily Install and Load the 'Tidyverse'
+library(viridis) # Default Color Maps from 'matplotlib'
+library(corrplot) # Visualization of a Correlation Matrix
+library(Hmisc) # Harrell Miscellaneous
+library(PerformanceAnalytics) # Econometric Tools for Performance and Risk Analysis
+library(spgwr) # Geographically Weighted Regression
+library(car) # Companion to Applied Regression
+library(tidyverse)
+library(broom)
+```
+
+
+### 1. Read vector data and obesity rate and its influencing factors data.
+
+(1) Read vector data
+Read the vector data of 2004 and 11 and display them on the map.
+
+```{r}
+shp04 <- st_read('/Users/gebeilei/OneDrive\ -\ University\ of\ Southampton/ucl/CASA0005/statistical-gis-boundaries-london/ESRI/MSOA_2004_London_High_Resolution.shp')
+shp11 <- st_read('/Users/gebeilei/OneDrive\ -\ University\ of\ Southampton/ucl/CASA0005/statistical-gis-boundaries-london/ESRI/MSOA_2011_London_gen_MHW.shp')
+qtm(shp04) + qtm(shp11)
+```
+
+(2) Read obesity and influencing factors data
+
+
+```{r include=FALSE}
+df.2013to2014 <- read_csv('/Users/gebeilei/OneDrive\ -\ University\ of\ Southampton/ucl/CASA0005/2013-2014.csv') 
+df.2011to2012 <- read_csv('/Users/gebeilei/OneDrive\ -\ University\ of\ Southampton/ucl/CASA0005/2011-2012.csv')
+```
+
+View the first five rows of data
+
+```{r}
+head(df.2013to2014)
+head(df.2011to2012)
+```
+
+Looking at the above data, we find that there are missing values. We use the column average to fill in the missing values in this column.
+
+```{r}
+library(zoo)
+df.2013to2014[,6:13] <- na.aggregate(df.2013to2014[,6:13])
+df.2011to2012[,6:13] <- na.aggregate(df.2011to2012[,6:13])
+```
+
+Convert the unit of obesity rate to%
+
+```{r}
+df.2013to2014[,6:9] <- df.2013to2014[,6:9]*100
+df.2011to2012[,6:9] <- df.2011to2012[,6:9]*100
+```
+
+
+(3) Connect the obesity data and influencing factor data with the vector data, and merge them into the vector data. The data of 13-14 years corresponds to the vector of 11 years, and the data of 11-12 years corresponds to the vector of 04 years.
+
+```{r}
+
+shp.1112 <- left_join(shp04, df.2011to2012, by = c("MSOA_CODE" = "Code"))
+shp.1314 <- left_join(shp11, df.2013to2014, by = c("MSOA11CD" = "Code"))
+#shp.1314.2 <- left_join(shp11, df.2013to2014, by = c("MSOA11CD" = "Code"))
+
+```
+
+Obesity distribution in the 4-5 years old age group.(reception class)
+
+```{r}
+qtm(shp.1112,fill = 'obese4_5') +
+  qtm(shp.1314,fill = 'obese4_5')
+```
+Obesity distribution in the 10-11 years old age group.(year six)
+
+```{r}
+qtm(shp.1112,fill = 'obese10_11') +
+  qtm(shp.1314,fill = 'obese10_11')
+```
+
+## 1. Correlation analysis
+
+```{r}
+df.1112 <- df.2011to2012 %>% select(obese4_5,obese10_11,weight4_5,weight10_11,TWI,NWI,NIBHC,NIAHC)
+chart.Correlation(df.1112, histogram=TRUE, pch=19, method = 'pearson') # see the correlation
+df.1314 <- df.2013to2014 %>% select(obese4_5,obese10_11,weight4_5,weight10_11,TWI,NWI,NIBHC,NIAHC)
+chart.Correlation(df.1314, histogram=TRUE, pch=19, method = 'pearson') # see the correlation
+```
+
+As can be seen from the above figure:
+(1)
+Obese and weight are highly positively correlated, which means that excess weight will increase the probability of obese;
+(2)
+Obesity rates are significantly correlated with TWI, NWI, NIBHC and NIAHC in both age stages.
+However, it can also be seen that these four variables are also significantly autocorrelated, that is, there is multicollinearity, but overall obesity has the strongest correlation with NIAHC.
+Let's use these four variables to fit and try.
+
+##  2. OLS
+
+```{r}
+
+summary(lm(obese4_5 ~ TWI, data = df.1112)) # OLS model
+summary(lm(obese4_5 ~ NWI, data = df.1112)) # OLS model
+summary(lm(obese4_5 ~ NIBHC, data = df.1112)) # OLS model
+summary(lm(obese4_5 ~ NIAHC, data = df.1112))# OLS model
+summary(lm(obese10_11 ~ TWI, data = df.1112)) # OLS model
+summary(lm(obese10_11 ~ NWI, data = df.1112)) # OLS model
+summary(lm(obese10_11 ~ NIBHC, data = df.1112)) # OLS model
+summary(lm(obese10_11 ~ NIAHC, data = df.1112))# OLS model
+
+```
+
+
+It can be seen from the above that no matter what age stage, NIAHC is used to fit obesity, it has the best effect, R2 is the largest, and it can be seen from the correlation graph that obesity and NIAHC have the strongest correlation. Therefore, in the following modeling process, we choose NIAHC as an independent variable to fit the incidence of obesity.
+
+## 3. Resuduals
+Let's first look at the residual distribution of the OLS model.
+
+```{r}
+model.1112.45 <- lm(formula = obese4_5 ~ NIAHC, data = df.1112)
+model.1314.45 <- lm(formula = obese4_5 ~ NIAHC, data = df.1314)
+model.1112.1011 <- lm(formula = obese10_11 ~ NIAHC, data = df.1112)
+model.1314.1011 <- lm(formula = obese10_11 ~ NIAHC, data = df.1314)
+
+shp.1112$ols_residuals_1112_45 <- residuals(model.1112.45)
+shp.1112$ols_residuals_1112_1011 <- residuals(model.1112.1011)
+shp.1314$ols_residuals_1314_45 <- residuals(model.1314.45)
+shp.1314$ols_residuals_1314_1011 <- residuals(model.1314.1011)
+
+```
+
+
+Look at the map, such as the residual distribution of the OLS model for the 4-5 year old age group
+
+```{r}
+qtm(shp = shp.1112,fill = 'ols_residuals_1112_45')
+
+```
+
+From the figure above, the residuals of the OLS model seem to have weak spatial aggregation. Let's further calculate the Moran index to see if there is spatial autocorrelation.
+First, establish the spatial adjacency relationship. Here, for convenience, we use the vector data of 2004 to establish the connection relationship.
+
+## 5. Moran test
+
+```{r}
+set.ZeroPolicyOption(TRUE)
+neighbours <- poly2nb(shp04)
+
+plot(st_geometry(shp04))
+plot(neighbours, coordinates(as(shp04, "Spatial")), add=TRUE, col="blue")
+
+```
+
+```{r}
+listw <- nb2listw(neighbours, style="C")
+moran.test(shp.1112$ols_residuals_1112_45, listw = listw)
+moran.test(shp.1112$ols_residuals_1112_1011, listw = listw)
+moran.test(shp.1314$ols_residuals_1314_45, listw = listw)
+moran.test(shp.1314$ols_residuals_1314_1011, listw = listw)
+
+```
+
+It can be seen from the above that the residuals of the four models all have weak autocorrelation in space, but this autocorrelation is very significant, so we can use GWR to model.
+
+## 5.1 global Moran 
+
+
+
+```{r}
+moran.test(shp.1112$obese4_5, listw = listw)
+moran.test(shp.1314$obese4_5, listw = listw)
+```
+
+```{r}
+moran.test(shp.1112$obese10_11, listw = listw)
+moran.test(shp.1314$obese10_11, listw = listw)
+```
+
+By comparison, we found that the Moran index of obesity has decreased no matter at the age of 4-5 or at the age of 10-11, which means that the obesity rate is not more concentrated in space area over time.
+
+## 6. GWR
+
+### obesity and NIAHC's GWR model in 2011-12
+
+reception class
+
+```{r}
+shp1112.sp <- as(shp.1112, 'Spatial')
+GWRbandwidth.1112.45 <- gwr.sel(obese4_5 ~ NIAHC, data=shp1112.sp, adapt=T, method="cv") #calculate kernel bandwidth
+GWRModel.1112.45 <- gwr(obese4_5 ~ NIAHC, data=shp1112.sp, adapt=GWRbandwidth.1112.45,
+                hatmatrix = TRUE,se.fit = TRUE) #run the gwr model
+GWRModel.1112.45 #print the results of the model
+```
+
+```{r}
+
+results1112.45 <- as.data.frame(GWRModel.1112.45$SDF)
+
+names(results1112.45)
+```
+
+
+```{r}
+GWR1112.45 <- shp.1112 %>%
+  mutate(coefNIAHC = results1112.45$NIAHC)
+
+tm_shape(GWR1112.45) +
+  tm_polygons(col = "coefNIAHC", 
+              palette = "RdBu", 
+              midpoint=NA,
+              title="2011-2012 reception class NIAHC coefficient",
+              alpha = 0.5) +
+  tm_scale_bar(position = c("left", "bottom")) +
+  tm_layout(title = "NIAHC",legend.position = c("right", "bottom"))
+```
+
+Year Six
+```{r}
+GWRbandwidth.1112.1011 <- gwr.sel(obese10_11 ~ NIAHC, data=shp1112.sp, adapt=T, method="cv") #calculate kernel bandwidth
+GWRModel.1112.1011 <- gwr(obese10_11 ~ NIAHC, data=shp1112.sp, adapt=GWRbandwidth.1112.1011,
+                hatmatrix = TRUE,se.fit = TRUE) #run the gwr model
+GWRModel.1112.1011 #print the results of the model
+```
+
+```{r}
+
+results1112.1011 <- as.data.frame(GWRModel.1112.1011$SDF)
+
+names(results1112.1011)
+```
+
+```{r}
+GWR1112.1011 <- shp.1112 %>%
+  mutate(coefNIAHC = results1112.1011$NIAHC)
+
+tm_shape(GWR1112.1011) +
+  tm_polygons(col = "coefNIAHC", 
+              palette = "RdBu", 
+              midpoint=NA,
+              title="2011-2012 Year Six NIAHC coefficient",
+              alpha = 0.5) +
+  tm_scale_bar(position = c("left", "bottom")) +
+  tm_layout(title = "NIAHC",legend.position = c("right", "bottom"))
+```
+As can be seen from the above, in the 2011 model, the R2 of the GWR model is larger than the R2 of the corresponding OLS model, that is, the goodness of fit has been improved. This shows that we use the GWR model is correct. Let's take a look at the performance of the GWR model in 2013.
+
+### obesity and NIAHC's GWR model in 2013-14
+
+reception class
+
+```{r}
+shp1314.sp <- as(shp.1314, 'Spatial')
+GWRbandwidth.1314.45 <- gwr.sel(obese4_5 ~ NIAHC, data=shp1314.sp, adapt=T, method="cv") #calculate kernel bandwidth
+GWRModel.1314.45 <- gwr(obese4_5 ~ NIAHC, data=shp1314.sp, adapt=GWRbandwidth.1314.45,
+                hatmatrix = TRUE,se.fit = TRUE) #run the gwr model
+GWRModel.1314.45 #print the results of the model
+```
+
+```{r}
+results1314.45 <- as.data.frame(GWRModel.1314.45$SDF)
+names(results1314.45)
+
+```
+
+```{r}
+GWR1314.45 <- shp.1314 %>%
+  mutate(coefNIAHC = results1314.45$NIAHC)
+
+tm_shape(GWR1314.45) +
+  tm_polygons(col = "coefNIAHC", 
+              palette = "RdBu", 
+              midpoint=NA,
+              title="2013-2014 reception class NIAHC coefficient",
+              alpha = 0.5) +
+  tm_scale_bar(position = c("left", "bottom")) +
+  tm_layout(title = "NIAHC",legend.position = c("right", "bottom"))
+```
+
+
+Year Six
+
+```{r}
+GWRbandwidth.1314.1011 <- gwr.sel(obese10_11 ~ NIAHC, data=shp1314.sp, adapt=T, method="cv") #calculate kernel bandwidth
+GWRModel.1314.1011 <- gwr(obese10_11 ~ NIAHC, data=shp1314.sp, adapt=GWRbandwidth.1314.1011,
+                hatmatrix = TRUE,se.fit = TRUE) #run the gwr model
+GWRModel.1314.1011 #print the results of the model
+```
+
+
+```{r}
+results1314.1011 <- as.data.frame(GWRModel.1314.1011$SDF)
+names(results1314.1011)
+
+```
+
+
+```{r}
+GWR1314.1011 <- shp.1314 %>%
+  mutate(coefNIAHC = results1314.1011$NIAHC)
+
+tm_shape(GWR1314.1011) +
+  tm_polygons(col = "coefNIAHC", 
+              palette = "RdBu", 
+              midpoint=NA,
+              title="2013-2014 Year Six NIAHC coefficient",
+              alpha = 0.5) +
+  tm_scale_bar(position = c("left", "bottom")) +
+  tm_layout(title = "NIAHC",legend.position = c("right", "bottom"))
+```
+From the 2013 model, it can be seen that the R2 of the GWR model is larger than the R2 of the corresponding OLS model, and the goodness of fit has been improved, which further shows that the GWR model is correct.
